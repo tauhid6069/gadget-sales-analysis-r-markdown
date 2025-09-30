@@ -1,0 +1,456 @@
+---
+title: "Assignment 2"
+author: "Md Tauhidul Islam"
+date: "2024-03-22"
+output: 
+  pdf_document:
+    latex_engine: xelatex
+# Kniting was showing Latex error "Unicode character λ (U+03BB)". As pdflatex does not support Unicode characters well, I have used xelatex.
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+# Setup
+```{r}
+# Loading the required packages
+library(tidyverse)
+library(dplyr)
+library(readr)
+library(tidyr)
+library(inspectdf)
+library(e1071)
+library(caret)
+```
+# Q1. Loading the data
+```{r}
+ysn = 1895813 # My student number
+filenum <- (ysn+1) %% 3
+filenum
+```
+```{r}
+filename <- paste0("./data/gadget_",filenum,".csv")
+filename
+```
+
+```{r}
+
+my_dataset <- read_csv(filename)
+my_dataset # Output the first 10 lines of the dataset
+```
+# Q2. Adding a new column of row numbers
+
+```{r}
+data_with_row <- my_dataset %>%
+  mutate(row_num = row_number()) %>%
+  relocate(row_num, .before = name) # Reordering row number to the leftmost column
+data_with_row
+```
+# Q3. Types of variables
+* Variable 1 (row_num): Quantitative Ordinal. This numeric variable represents the number of rows in an order.
+
+* Variable 2 (name): Categorical Nominal. This variable represents names of the cities which has no order.
+
+* Variable 3 (population): Quantitative Discrete. This variable counts the number of people in corresponding cities. Counts are discrete.
+
+* Variable 4 (advertising): Quantitative Continuous. This variable represents the amount of money spent for advertising in corresponding cities. It can take on any value within a range, including fractional values which indicates precise values rather than discrete counts.
+
+* Variable 5 (sales): Quantitative Discrete. This variable represents the number of sales in corresponding cities and this  has no order. This is a discrete data as this is a count of gadget sale. We cannot sale gadgets in fraction.
+
+# Q4. Cleaning and taming the data
+```{r}
+# First let's check the summary
+summary(data_with_row)
+
+# We need to tame the data to be able to do clean the data
+
+tamed_data <- data_with_row %>%
+  mutate(
+    row_num = as.integer(row_num),
+    name = as.character(name),
+    population = as.integer(population),
+    advertising = as.numeric(str_replace_all(advertising, "\\$|,", "")),
+    sales = as.integer(sales)
+  )
+
+# Let's inspect the missing values of tamed data now.
+
+inspect_na(tamed_data)
+```
+
+## Let's replace missing city names and removing other missing rows
+
+```{r}
+tamed_data <- tamed_data %>%
+  mutate(name = if_else(is.na(name), 
+                        paste0("noname_ ", cumsum(is.na(name))), name)) %>%
+  drop_na()
+
+#Let's check missing values now
+
+inspect_na(tamed_data)
+```
+
+Now, we can see the data has no more missing values.
+
+## Now, let's remove any duplicate rows
+```{r}
+# First, let's find if there are any duplicates
+num_duplicated_rows <- sum(duplicated(tamed_data))
+num_duplicated_rows
+
+```
+
+There are no duplicated rows present in our dataset. Therefore, no actions are needed to remove duplicates.
+
+## Let's convert any negative values into positve values
+```{r}
+tamed_data <- tamed_data %>% 
+  mutate(
+    sales = abs(sales),
+    population = abs(population),
+    advertising = abs(advertising)
+  )
+
+# Let's the the summary now to see some significant changes
+summary(tamed_data)
+```
+
+No more negative numbers in our data now.
+
+## Rmoving suspicious number
+Now, we'll remove Suspiciously small or large numbers (in absolute value). let' plot our three main variables for a better understanding. We'll manually find out the range that we want to keep in our data from the plot.
+
+First of all let's find and remove the outliers.
+```{r}
+q1_ad <- quantile(tamed_data$advertising, 0.25) # 1st quartile
+q3_ad <- quantile(tamed_data$advertising, 0.75) # 3rd quartile
+
+iqr_ad <- q3_ad - q1_ad # interquartile range
+
+lower_data_point_ad <- q1_ad - 1.5 * iqr_ad
+upper_data_point_ad <- q3_ad + 1.5 * iqr_ad
+
+cleaned_data <- tamed_data %>%
+  filter(tamed_data$advertising > lower_data_point_ad & tamed_data$advertising < upper_data_point_ad)
+
+# Let's see the summary now
+
+summary(cleaned_data)
+
+# Let's Plot histogram for 'advertising' for visualisation 
+
+ggplot(cleaned_data, aes(x = advertising)) +
+  geom_histogram(bins = 50, fill = "violet", color = "black") +
+  labs(x = "Advertising", y = "Frequency", title = "Histogram of Advertising")
+```
+
+We are still having suspiciously low numbers, as lower whisker is not able to eliminate the absolute low number in this case.
+
+Therefore, based on the summary and histogram let's consider the data below 1st percentile and above 95 percentile is suspicious. We we'll remove the suspicious data based on our consideration.
+```{r}
+lower_lim_ad <- quantile(cleaned_data$advertising, 0.01)
+upper_lim_ad  <- quantile(cleaned_data$advertising, 0.95)
+
+cleaned_data <- cleaned_data %>%
+  filter(cleaned_data$advertising > lower_lim_ad & cleaned_data$advertising < upper_lim_ad)
+
+summary(cleaned_data)
+
+
+ggplot(cleaned_data, aes(x = advertising)) +
+  geom_histogram(bins = 50, fill = "violet", color = "black") +
+  labs(x = "Advertising", y = "Frequency", title = "Histogram of Advertising")
+```
+
+Now the plot looks much better. We'll do the same with population and sales.
+
+```{r}
+q1_pop <- quantile(cleaned_data$population, 0.25) # 1st quartile
+q3_pop <- quantile(cleaned_data$population, 0.75) # 3rd quartile
+
+iqr_pop <- q3_pop - q1_pop # interquartile range
+
+lower_data_point_pop <- q1_pop - 1.5 * iqr_pop
+upper_data_point_pop <- q3_pop + 1.5 * iqr_pop
+
+cleaned_data <- cleaned_data %>%
+  filter(cleaned_data$population > lower_data_point_pop & cleaned_data$population < upper_data_point_pop)
+
+# Let's see the summary now
+
+summary(cleaned_data)
+
+# Plot histogram for 'population' for visualisation
+ggplot(cleaned_data, aes(x = population)) +
+  geom_histogram(bins = 50, fill = "pink", color = "black") +
+  labs(x = "Population", y = "Frequency", title = "Histogram of population")
+```
+
+Same case happened with population as the whisker is not able to remove the suspiciously lower number in absoulate value. Therefore, we will proceed with the same process as advertising.
+
+```{r}
+lower_lim_pop <- quantile(cleaned_data$population, 0.01)
+upper_lim_pop  <- quantile(cleaned_data$population, 0.95)
+
+cleaned_data <- cleaned_data %>%
+  filter(cleaned_data$population > lower_lim_pop & cleaned_data$population < upper_lim_pop)
+
+summary(cleaned_data)
+
+
+ggplot(cleaned_data, aes(x = population)) +
+  geom_histogram(bins = 50, fill = "pink", color = "black") +
+  labs(x = "Population", y = "Frequency", title = "Histogram of population")
+```
+
+Let's proceed with sales now.
+```{r}
+q1_sales <- quantile(cleaned_data$sales, 0.25) # 1st quartile
+q3_sales <- quantile(cleaned_data$sales, 0.75) # 3rd quartile
+iqr_sales <- q3_sales - q1_sales # Interquartile range
+
+lower_data_point_sales <- q1_sales - 1.5 * iqr_sales
+upper_data_point_sales <- q3_sales + 1.5 * iqr_sales
+
+cleaned_data <- cleaned_data %>%
+  filter(cleaned_data$sales > lower_data_point_sales & cleaned_data$sales < upper_data_point_sales)
+
+summary(cleaned_data)
+
+# Plot histogram for 'sales' for visualisation
+ggplot(cleaned_data, aes(x = sales)) +
+  geom_histogram(bins = 50, fill = "gray", color = "black") +
+  labs(x = "Sales", y = "Frequency", title = "Histogram of sales")
+
+```
+
+We'll proceed with 1 and 95 percentile for further filtering.
+```{r}
+lower_lim_sales <- quantile(cleaned_data$sales, 0.01)
+upper_lim_sales  <- quantile(cleaned_data$sales, 0.95)
+
+cleaned_data <- cleaned_data %>%
+  filter(cleaned_data$sales > lower_lim_sales & cleaned_data$sales < upper_lim_sales)
+
+summary(cleaned_data)
+
+
+ggplot(cleaned_data, aes(x = sales)) +
+  geom_histogram(bins = 50, fill = "gray", color = "black") +
+  labs(x = "Sales", y = "Frequency", title = "Histogram of sales")
+
+# Displaying data
+cleaned_data
+
+# Let' see the final summary of our data
+summary(cleaned_data)
+```
+
+Now, the data looks perfect for our further analysis.
+
+# Q5. Creating new variables
+```{r}
+cleaned_data <- cleaned_data %>%
+  mutate(
+    sales_pct = (sales/population)*100,
+    adv_exp_pp = advertising/population
+  )
+cleaned_data
+```
+
+## Clasification of the new variables:
+* Both of these new variables are floating numbers and can be considered as ratio variables which is a type of quantitative variable. These variables have a clear definition of being 0 which satisfies the characteristics of ratio variable. 0% of sales_pct indicates no sales at all, and 0 adv_exp_pp indicates no amount being spend on advertisement per person.
+
+# Q6. Taking random sample
+```{r}
+set.seed(ysn)
+sampled_data <- cleaned_data %>%
+  sample_n(700)
+sampled_data
+```
+
+# Q7. Producing summary statistics
+```{r}
+inspect_num(sampled_data)
+```
+
+# Q8. Producing scatterplot 
+```{r}
+ggplot(sampled_data, aes(x = adv_exp_pp, y = sales_pct)) + 
+  geom_point()+
+  geom_smooth(method ="lm") + 
+  labs(title = "Scatterplot of Sales Percentage vs. Advertising Expenditure Per Person",
+       x = "Advertising Expenditure Per Person",
+       y = "Sales Percentage")
+```
+
+As we can see from the plot, the sales percentage increases when the expenditure on advertisement increase. The best fit line suggests no curvature or strong deviation. This indicates a linear relationship between two variables.
+ 
+# Q9. Producing histogram
+```{r}
+ggplot(sampled_data, aes(x = sales_pct)) + 
+  geom_histogram(bins = 50, fill = "gray", color = "black")+ 
+  labs(x = "sales_pct", y = "Frequency", title = "Histogram of Sales")
+
+skewness_sales_pct <- skewness(sampled_data$sales_pct)
+print(skewness_sales_pct)
+```
+
+The data does not look like a standard normal distribution as it has a positive skewness of 0.888 which indicates a right skewed distribution. To be a normal distribution the plot should be symmetric to the mean and skewness be closer to 0.
+
+# Q10. Applying Box-Cox transformation
+ 
+## (a) Finding lambda value
+```{r}
+box_cox  <- BoxCoxTrans(sampled_data$sales_pct)
+box_cox$lambda
+```
+
+## (b) Apply the transformation to create a new column 
+```{r}
+sampled_data <- sampled_data %>%
+  mutate(sales_pct_trans = predict(box_cox, sampled_data$sales_pct))
+sampled_data
+```
+
+# Q11. Producing scatterplot and histogram of the transformed data 
+
+## Scatterplot
+```{r}
+ggplot(sampled_data, aes(x = adv_exp_pp, y = sales_pct_trans)) + 
+  geom_point()+
+  geom_smooth(method ="lm") + 
+  labs(title = "Scatterplot of Sales Percentage vs. Advertising Expenditure Per Person",
+       x = "Advertising Expenditure Per Person",
+       y = "Sales Percentage")
+```
+
+## Histogram
+```{r}
+ggplot(sampled_data, aes(x = sales_pct_trans)) + 
+  geom_histogram(bins = 50, fill = "gray", color = "black")+ 
+  labs(x = "sales_pct", y = "Frequency", title = "Histogram of Sales")
+
+skewness_sales_pct_trans <- skewness(sampled_data$sales_pct_trans)
+print(skewness_sales_pct_trans)
+```
+
+The scatterplot shows increase in sales percentage with the increase of advertise expenditure along the line of best fit. This suggest strong linear relationship between these two variables. The deviation of the data points from the line is decreased after the transformation, suggesting a more linear relationship.
+
+The skewness of the histogram is decreased now which suggests a slightly left skewed distribution with a skewness of 0.0577. This is very close to 0. Therefore, we can say that this a very close to a standard normal distribution.
+
+With these transformation, the data is now more suitable for linear modeling.
+
+# Q12. Finding general equations and building linear model 
+
+## (a) General equation of a linear model for the transformed data
+The general equation for a simple linear model is:
+
+$y = \beta_0 + \beta_1X + \epsilon$
+where, $y$ is the response variable, $x$ is the explanatory variable
+$\beta_0$ is the y-intercept of the regression line,
+$\beta_1$ is the slope of the regression line, and
+$\epsilon$ is the error term
+
+For our transformed data, 'sales_pct_trans' is our response variable and  'adv_exp_pp' is our explanatory variable. Therefore, the equation is -
+
+sales_pct_trans = $\beta_0$ + $\beta_1$(adv_exp_pp) + $\epsilon$
+
+## (a) Formula for the line of best fit 
+
+The formula for the line of best fit is - 
+$\hat{y} = \hat{\beta_0} + \hat{\beta_1}X$
+
+
+Where,
+$\hat{y}$ is the predicted value of the response variable based on the regression line.
+$\hat{\beta_0}$ is the estimated $y$-intercept and 
+$\hat{\beta_1}$ is the estimated slope of the regression line.
+$x$ is the value of the predictor variable.
+
+sales_pct_trans_pred = $\hat{\beta_0}$ + $\hat{\beta_1}$(adv_exp_pp) 
+
+## (c) Building the linear model
+```{r}
+lm_model <- lm(sales_pct_trans ~ adv_exp_pp, data = sampled_data)
+
+# Summarising to get the coefficients
+model_summary <- summary(lm_model)
+model_summary
+```
+
+From the summary we have, 
+$\hat{\beta_0}$ = -1.80
+$\hat{\beta_1}$ = 3.12
+
+Therefore, our equation of the line becomes,
+
+sales_pct_trans_pred = -1.80 + 3.12(adv_exp_pp)
+
+# Q13. Producing scatterplot and histogram of the transformed data 
+
+## Checking linearity 
+```{r}
+plot(lm_model, which = 1)
+```
+
+Findings: We can see a roughly straight (no trends) line which indicates that the assumptions are satisfied.
+
+## Checking homoscedasticity  
+```{r}
+plot(lm_model, which = 3)
+
+```
+
+Findings: Again, We can see a roughly straight and flat line with no trends, which indicates that the model has constant spread.
+
+## Checking normality  
+```{r}
+plot(lm_model, which = 2)
+
+```
+
+Findings: From the normal QQ plot, we can notice that points do not drift away from the line within -2 and +2. Therefore, we are confident in our normality assumption as the points between -2 and +2 is our main concern.
+
+## Checking independence  
+One potential problem with independence assumption could be the method of data collection. If the data is collected from closely related cities, their errors could be correlated because of their shared economic conditions or market trends.
+
+# Q14. Predicting the percentage of a city’s population that will buy a Gadget 2^®^ the given scenarios
+```{r}
+
+new_data  <- tibble(
+  adv_exp_pp = c(0.05, 3.14, 6.00) 
+)
+predictions_transformed <- predict(lm_model, new_data, interval = "prediction", level = 0.90)
+
+predictions_transformed
+
+# Let's inverse the box-cox transformation to get the original scaled data for appropriate prediction
+
+inverse_boxcox <- function(x, lambda)
+  if(lambda == 0) exp(x) else (lambda * x + 1)^(1/lambda)
+
+output <- as_tibble(predictions_transformed) %>%
+  mutate(
+    adv_exp_pp = new_data$adv_exp_pp,
+    fit = inverse_boxcox(fit, box_cox$lambda),
+    lwr = inverse_boxcox(lwr, box_cox$lambda),
+    upr = inverse_boxcox(upr, box_cox$lambda)
+  ) %>%
+  relocate(adv_exp_pp, .before = fit)
+output
+
+```
+
+# Q15. Interpretation
+
+For an advertising expenditure of \$0.05, the model predicts that only 0.0321% people are expected to make a purchase. However, the fitted value is outside  of the prediction interval (0.154% - 0.563% ) which suggests a discrepancy. This could have happened due to to the model being extrapolating beyond the range of data it was trained on, or it might indicate that the linear model is not suitable for extremely low levels of advertising expenditure.
+
+The model predicts 25.1% of purchase if the company wishes to spend \$3.14 per person. The model is 90% confident that the true mean response is expected to lie within 19.7% - 31.0%. This might help the company to make decision.
+
+Finally, if the company wishes to spend a higher amount of money for the advertising, in our case it was \$6.00 per person, the model predicts a significant increase in purchase percentage which is 89.7% with an interval of $79.2 to 101%. The upper interval is exceeding 100% is not possible in the context of percentages. This anomaly suggests that for a high value of adv_exp_pp the model may not be completely reliable.
+
+However, it is clear that a higher investment in advertisement could potentially lead to a higher sales. For practical purposes, we suggest that, the company should focus on moderate or high level of advertising expenditure which could be in between 3.14-6.00 in order to generate great sales.
+
