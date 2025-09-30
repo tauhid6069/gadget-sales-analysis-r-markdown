@@ -1,4 +1,6 @@
-Gadget Sales Analysis – Advertising Impact
+## Gadget Sales Analysis – Advertising Impact
+---
+
 📌 Project Overview
 
 This project explores how advertising expenditure per person influences gadget sales across cities.
