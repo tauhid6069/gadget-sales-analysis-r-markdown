@@ -82,14 +82,6 @@ Knit or run all chunks to reproduce cleaning, EDA, modelling and plots.
 
 ---
 
-📂 Project Structure
-├── data/               # input CSV
-├── scripts/            # R code or Rmd file
-├── figures/            # generated histograms & scatterplots
-└── README.md
-
----
-
 📈 Future Work
 
 Compare multiple advertising channels
